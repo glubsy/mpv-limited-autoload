@@ -2,7 +2,7 @@
 # Wrapper script for mpv
 # Usage: ${0} path/to/directory [path/to/directoriy, ...]
 
-PARAMS=""
+declare -a PARAMS
 PARAM_COUNT=0
 while (( "$#" )); do
   case "$1" in
@@ -47,21 +47,21 @@ while (( "$#" )); do
       exit 1
       ;;
     *) # preserve positional arguments
-      PARAMS="$PARAMS $1"
+      PARAMS+=("$1")
       PARAM_COUNT=$((PARAM_COUNT+1))
       shift
       ;;
   esac
 done
 # set positional arguments in their proper place
-eval set -- "$PARAMS"
+eval set -- "${PARAMS[@]}"
 
 # Set a default sane exclusion filter
 if [[ -z ${EXCLUDE} ]]; then
 	EXCLUDE="blend,py,pdf,txt"
 fi
 
-echo -e "DEBUG POS PARAMS:${PARAMS}\nPARAM_COUNT=${PARAM_COUNT}\nEXCLUDE:${EXCLUDE}"
+echo -e "DEBUG POS PARAMS:${PARAMS[@]}\nPARAM_COUNT=${PARAM_COUNT}\nEXCLUDE:${EXCLUDE}"
 
 if [[ ! -z ${EXCLUDE} ]]; then
 	# replace commas with spaces
@@ -72,13 +72,13 @@ if [[ ! -z ${EXCLUDE} ]]; then
 			FIND_OPTS="${FIND_OPTS} -a -not -iname \"*.${EXT}\"";
 		fi
 	done;
-	FIND_CMD="find ${PARAMS} -type f \( ${FIND_OPTS} \)"
+	FIND_CMD="find ${PARAMS[@]} -type f \( ${FIND_OPTS} \)"
 	if [[ "${SORTED}" -eq 1 ]]; then
 		# sorted by decreasing file size https://stackoverflow.com/questions/22598205/how-sort-find-result-by-file-sizes
 		FIND_CMD="${FIND_CMD} -printf '%s\t%p\n' | sort -nr | cut -f2-"
 	fi
 else
-	FIND_CMD="find ${PARAMS} -type f";
+	FIND_CMD="find ${PARAMS[@]} -type f";
 fi
 
 if [[ ! -z ${EXCLUDE_PATHS} ]]; then
@@ -96,19 +96,21 @@ if [[ "${SHUFFLE}" -eq 1 ]]; then
 	elif [[ -z ${EXCLUDE_PATH} && ${EXCLUDE} == "" ]]; then 
 		# only one dir passed and no special rule, let mpv load & shuffle
 		# can't seem to pass exclusion filters to mpv?
-		mpv --shuffle -- ${PARAMS}
+		mpv --shuffle -- "${PARAMS[@]}"
 	else
 		echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
 		eval ${FIND_CMD} | mpv ${OPTIONS} --playlist=-;
 	fi
 elif [[ "${PLAIN}" -eq 1 ]]; then
+	# Build string from arguments, separated by \n characters
+	# and feed it to mpv as a playlist. mpv will then auto-load files 
+	# as they are being read.
 	PAR="";
-	for p in "${PARAMS}"; do
-	    echo "p: ${p}":
+	for p in "$@"; do 	# or ${PARAMS[@]}
             PAR="${p}$'\n'${PAR}";
 	done;
-	echo -E "DEBUG: PAR: ${PAR}";
-	#echo -E "${PAR}" | mpv ${OPTIONS} --playlist=- --;
+	echo "DEBUG: PAR: ${PAR}";
+	eval echo "${PAR}" | mpv ${OPTIONS} --playlist=- --;
 
 else
 	echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
@@ -116,9 +118,9 @@ else
 
 fi
 
-# TODO save playlist 
-# limit find output with | head -500
-# Generate playlist of directories
+# TODO 
+# * save playlist 
+# * limit find output with | head -500
 
 # Old SHUFFLE version means the shell is expanding, which implies race conditions
 #cd "${1}" || echo "couldn't change dir to ${1}";
