@@ -101,25 +101,26 @@ if [[ "${SHUFFLE}" -eq 1 ]]; then
 		echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
 		eval ${FIND_CMD} | mpv ${OPTIONS} --playlist=-;
 	fi
-elif [[ "${PLAIN}" -eq 1 ]]; then
+elif [[ "${PLAIN}" -eq 1 ]] && [[ ${#PARAMS[@]} -eq 1 ]]; then
 	# Build string from arguments, separated by \n characters
 	# and feed it to mpv as a playlist. mpv will then auto-load files 
 	# as they are being read.
-	PAR="";
-	for p in "$@"; do 	# or ${PARAMS[@]}
-            PAR="${p}$'\n'${PAR}";
-	done;
-	echo "DEBUG: PAR: ${PAR}";
-	eval echo "${PAR}" | mpv ${OPTIONS} --playlist=- --;
+	# This only works well with one single pos argument. Otherwise, the playlist will be filled with all files from the first directory read, and other directory entries will be lost in the long list of files in the playlist. Hence we forbid this command if there is more than one pos arg.
+	#PAR="";
+	#for p in "$@"; do 	# or ${PARAMS[@]}
+        #    PAR="${p}$'\n'${PAR}";
+	#done;
+	# echo "DEBUG: PAR: ${PAR}";
+	mpv ${OPTIONS} ${PARAMS[@]};
 
 else
-	echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
+	#echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
 	eval ${FIND_CMD} | mpv ${OPTIONS} --playlist=- --;
 
 fi
 
 # TODO 
-# * save playlist 
+# * save playlist into /tmp, named from hash of path + mtime; load it if present
 # * limit find output with | head -500
 
 # Old SHUFFLE version means the shell is expanding, which implies race conditions
