@@ -17,16 +17,32 @@
 #include <sys/dir.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <mpv/client.h>
 
 mpv_handle *HANDLE = NULL;
+int64_t MAX_READ_FILES = 5; // DEBUG
+const char *LOAD_CMD[] = {"loadfile", NULL, "append", NULL};
 
-struct dir_files {
-    char **files; // paths of files read
-    int64_t num_entries; // number of files in files currently in files
-    int64_t offset; // value of dirent->d_off or returned by telldir()
-} dir_files;
+
+typedef struct DirState {
+    char *root_dir;
+    int64_t num_entries; // number of files added last time
+    char *last_dir; // last sub-directory read
+    int64_t offset; // value of dirent->d_off or returned by telldir() from the last_dir
+} dirState;
+
+dirState **g_aDirState = NULL;
+int64_t g_iNumState = 0;
+
+struct InitialPlaylist{
+    // This is sort of like getting argc + argv from mpv
+    int64_t count; // number of items in the playlist after mpv's first load
+    char **entries; // entries in the playlist after mpv's first load
+};
+
+struct InitialPlaylist g_InitialPL;
 
 int check_mpv_err(int status) {
     if( status < MPV_ERROR_SUCCESS ){
@@ -45,8 +61,7 @@ int on_before_start_file_handler(mpv_event *event) {
 }
 
 char **get_playlist_entries(int count) {
-    // char **array = malloc(count * sizeof(char*));
-    char **array = calloc(count, sizeof(char*));
+    char **array = (char **) calloc(count, sizeof(char*));
     int length = snprintf(NULL, 0, "%d", count) + 1;
     length = length + 9 + 9 + 1;  // playlist/ + digit + filename + \0
     char query[length];
@@ -55,19 +70,19 @@ char **get_playlist_entries(int count) {
         snprintf(query, sizeof(query), "playlist/%d/filename", i);
         printf("Query prop: \"%s\".\n", query);
 
-        char *path = mpv_get_property_string(HANDLE, query);
-        if (!path) {
-            fprintf(stderr, "Nothing more at index %d\n", i);
-            return array;
+        char *szPath = mpv_get_property_string(HANDLE, query);
+        if (!szPath) {
+            fprintf(stderr, "Error: nothing at playlist index %d!\n", i);
+            break;
         }
-        printf("Playlist entry: %s.\n", path);
+        printf("Found playlist entry: %s.\n", szPath);
 
-        array[i] = path; // only keep pointer, remember to mpv_free()!
+        array[i] = szPath; // only keep pointer, remember to mpv_free()!
     }
     return array;
 }
 
-int64_t playlist_length() {
+int64_t get_playlist_length() {
     int64_t count;
     int ret;
     ret = mpv_get_property(HANDLE, "playlist/count", MPV_FORMAT_INT64, &count);
@@ -93,7 +108,7 @@ int64_t playlist_length() {
 enum dirFilter {
     D_ALL = 0,
     D_FILES,
-    D_DIRS,
+    D_DIRS, // recurse
     D_NORMAL
 };
 
@@ -103,101 +118,120 @@ int append_to_playlist(const char * path) {
     check_mpv_err(err);
 }
 
-
-int64_t recurse_dir(const char * cmd) {
-    return 1;
-}
-
-/* Returns the number of files added to list
-*/
-int64_t enumerate_dir(DIR* dir,
-                     const char* dirPath,
-                     enum dirFilter filter,
-                     int64_t maxfiles,
-                     int64_t* offset )
+void enumerate_dir(const char* szDirPath,
+                     enum dirFilter eFilter,
+                     int64_t *iAddedFiles,
+                     int64_t* iOffset )
 {
-    unsigned int pathLength = snprintf(NULL, 0, "%s", dirPath) + 1;
-    const char *cmd[] = {"loadfile", NULL, "append", NULL};
+    struct dirent *entry;
+    struct stat st;
+    DIR *_dir = NULL;
+    _dir = opendir(szDirPath);
+    printf("DEBUG opening: %s\n", szDirPath);
 
-    struct dirent *e;
-    int64_t *added_files = 0;
-
-    while (added_files < maxfiles) {
-        e = readdir(dir);
-        if (!e) { // end of stream
+    while (*iAddedFiles < MAX_READ_FILES) {
+        entry = readdir(_dir);
+        if (!entry) { // end of stream
             // rewinddir(dir);
             // continue;
             break;
         }
         
-        char *name = e->d_name;
+        char *name = entry->d_name;
 
         if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
                 continue;
+ 
+        unsigned int iPathLength = snprintf(NULL, 0, "%s", szDirPath) + 1;
+        size_t iFullPathLength = iPathLength + _D_ALLOC_NAMLEN(entry) + 1; // for '/'
+        char szFullPath[iFullPathLength];
+        snprintf(szFullPath, iFullPathLength, "%s/%s", szDirPath, name);
 
-        unsigned char type = e->d_type;
+#ifdef __USE_MISC
+        if ((entry->d_type == DT_DIR) /*&& (filter & D_DIRS)*/) {
+            // FIXME pass in szFullPath??
+            printf("Dir detected %s\n", szFullPath);
+            enumerate_dir(szFullPath, eFilter, iAddedFiles, iOffset);
+            continue;
+        } else {
+#else
+        if (lstat(szFullPath, &st) < 0) {
+            perror(szFullPath);
+            continue;
+        }
+        if(S_ISDIR(st.st_mode)) {
+            printf("Dir stat detected %s\n", szFullPath);
+            enumerate_dir(szFullPath, eFilter, iAddedFiles, iOffset);
+        } else {
+#endif // __USE_MISC
 
-        // if (filter & D_FILES) 
-
-        size_t full_path_length = pathLength + _D_ALLOC_NAMLEN(e) + 1; // for '/'
-        char fullpath[full_path_length];
-        snprintf(fullpath, full_path_length, "%s/%s", dirPath, name);
-
-        cmd[1] = fullpath;
-        mpv_command(HANDLE, cmd);
-
-        ++added_files;
+        LOAD_CMD[1] = szFullPath;
+        mpv_command(HANDLE, LOAD_CMD);
+        (*iAddedFiles)++;
+        }
     }
+    closedir(_dir);
+}
 
-    return added_files;
+void clear_playlist(void){
+    const char *cmd[] = {"playlist-clear", NULL};
+    int err = mpv_command(HANDLE, cmd);
+    check_mpv_err(err);
 }
 
 int on_init() {
     /* Get the initial elements loaded in the playlist.
      * These should correspond to the positional arguments passed to mpv.
      */
-    int64_t count = playlist_length();
-    printf("Playlist length = %d.\n", count);
+    int64_t pl_count = get_playlist_length();
+    g_InitialPL.count = pl_count;
+    printf("Playlist length = %d.\n", g_InitialPL.count);
 
-    char **pl_entries = get_playlist_entries(count);
+    char **pl_entries = get_playlist_entries(pl_count);
+    g_InitialPL.entries = pl_entries;
 
-    const char *cmd[] = {"playlist-clear", NULL};
-    int err = mpv_command(HANDLE, cmd);
-    check_mpv_err(err);
+    clear_playlist();
 
-    for (int i = 0; i < count; ++i) {
+    for (int i = 0; i < pl_count; ++i) {
         printf("Current entry %d: %s.\n", i, pl_entries[i]);
 
         /* We want to load files from that entry if it's a directory */
         DIR *dir = NULL;
         dir = opendir(pl_entries[i]);
         if (dir != NULL) {
+            closedir(dir);
+            g_iNumState++;
+            dirState *_dirState = (dirState *) malloc(sizeof(dirState));
+            g_aDirState = (dirState **) realloc(g_aDirState, g_iNumState * sizeof(dirState));
+            g_aDirState[g_iNumState - 1] = _dirState;
+            g_aDirState[g_iNumState - 1]->root_dir = pl_entries[i];
+            printf("dir state: %s\n", g_aDirState[g_iNumState - 1]->root_dir);
             int64_t offset = 0;
-            int64_t num_added = enumerate_dir(dir, pl_entries[i], D_NORMAL, 5, &offset);
-            printf("Number of added files for %s: %d\n", pl_entries[i], num_added);
+            int64_t iAddedFiles = 0;
+            enumerate_dir(pl_entries[i], D_NORMAL, &iAddedFiles, &offset);
+            printf("Number of added files for %s: %d\n", pl_entries[i], iAddedFiles);
         } else {
             append_to_playlist(pl_entries[i]);
         }
         mpv_free(pl_entries[i]);
     }
+    int64_t newcount = get_playlist_length();
+    printf("New playlist length = %d.\n", newcount);
 
-
-    int64_t newcount = playlist_length();
-    printf("Playlist new length = %d.\n", newcount);
-
-    get_playlist_entries(newcount);
+    char **entries = get_playlist_entries(newcount);
+    --newcount;
+    while (newcount >= 0) {
+        mpv_free(entries[newcount]);
+        --newcount;
+    };
+    free(entries);
 
     free(pl_entries);
-
-    // DIR **dirs; // array of dirs to be loaded later.
-
-    // for ( int i=0; i < sizeof(dirs); ++i ) {
-    //     // load each entry into playlist
-    //     readPartial(dirs[i], 3);
-    //     closedir(dirs[i]);
-    // }
 }
 
+void cleanup(void){
+    return;
+}
 
 int mpv_open_cplugin(mpv_handle *handle) {
     HANDLE = handle;
@@ -211,6 +245,7 @@ int mpv_open_cplugin(mpv_handle *handle) {
         // if (event->event_id == MPV_EVENT_HOOK)
         //     on_before_start_file_handler(event);
         if (event->event_id == MPV_EVENT_SHUTDOWN)
+            cleanup();
             break;
     }
     return 0;
