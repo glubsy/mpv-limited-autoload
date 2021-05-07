@@ -17,7 +17,7 @@
 #include <sys/dir.h>
 #include <errno.h>
 // #define _GNU_SOURCE //strcasestr
-#include <string.h> //strcasestr strstr
+#include <string.h> //strcasestr strstr strdup
 #include <sys/stat.h>
 #include <unistd.h>
 // #include <limits.h>
@@ -28,32 +28,62 @@
 
 #include <mpv/client.h>
 
-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+// #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 mpv_handle *HANDLE = NULL;
 uint64_t MAX_READ_FILES = 30;
 
-const char *LOAD_CMD[] = {"loadfile", NULL, "append", NULL};
+typedef enum MethodType {
+    M_REPLACE = 0,
+    M_APPEND
+} methodType;
+
+const char* methodNames[] = {"replace", "append"};
+
+static const char *LOAD_CMD[] = {"loadfile", NULL, "append", NULL};
+methodType METHOD = M_REPLACE;
+
+typedef struct DirNode {
+    
+    long offset;
+    long mtime;
+    struct DirNode *next;
+} dirNode;
+
 
 typedef struct DirState {
-    char *root_dir;  //name
-    DIR *ptr;
+    char *root_dir;  // name of the root directory
+    DIR *ptr; // opened fd to the directory
     int64_t num_entries; // number of files added last time
     char *last_dir; // name of the last sub-directory read
     int64_t offset; // value of dirent->d_off or returned by telldir() from the last_dir
 } dirState;
 
-dirState **g_aDirState = NULL; // dynamic array of dirStates
-int64_t g_iNumState = 0; // number of directories we keep track of
-
 int iScriptActive = 0;
 
-struct PlaylistDescriptor{
-    // This is sort of like getting argc + argv from mpv
-    int64_t count; // number of items in the playlist after mpv's first load
-    char **entries; // entries in the playlist after mpv's first load
-} g_InitialPL;
+typedef enum FileType {
+    FT_DIR = 0,
+    FT_FILE
+} fileType;
 
+typedef struct PlaylistEntry {
+    union {
+        char *name; // only valid if type is FT_DIR
+        dirState *state; // only valid if type is FT_FILE
+    } u;
+    fileType type;
+} playlistEntry;
+
+struct PlaylistDescriptor { // mpv initial playlist entries
+    // This is sort of like getting argc + argv from mpv
+    uint64_t count; // number of items in the playlist after mpv's first load
+    playlistEntry *entries; // pointer to the first entry in the playlist (array)
+};
+
+struct PlaylistDescriptor g_InitialPL = {
+    .count = 0,
+    .entries = NULL
+};
 
 int check_mpv_err(int status) {
     if ( status < MPV_ERROR_SUCCESS ) {
@@ -71,10 +101,12 @@ int on_before_start_file_handler(mpv_event *event) {
     return 0;
 }
 
+/* @param count number of item returned by property "playlist-count".
+ */
 char **get_playlist_entries(int count) {
-    char **array = (char **) calloc(count, sizeof(char*));
-    int length = snprintf(NULL, 0, "%d", count) + 1;
-    length = length + 9 + 9 + 1;  // playlist/ + digit + filename + \0
+    char **array = (char **)calloc(count, sizeof(char*));
+    int length = snprintf(NULL, 0, "%d", count);
+    length = 9 + length + 9 + 1;  //  playlist/ + digits +filename + \0
     char query[length];
     for (int i = 0; i < count; ++i) {
         query[0] = '\0';
@@ -93,8 +125,8 @@ char **get_playlist_entries(int count) {
     return array;
 }
 
-int64_t get_playlist_length() {
-    int64_t count;
+uint64_t get_playlist_length() {
+    uint64_t count;
     int ret;
     ret = mpv_get_property(HANDLE, "playlist/count", MPV_FORMAT_INT64, &count);
     if (ret != MPV_ERROR_SUCCESS) {
@@ -123,7 +155,15 @@ enum dirFilter {
     D_NORMAL
 };
 
-int append_to_playlist(const char * path) {
+
+/* NOTES: in this implementation, we don't really care about the order of
+ * the returned entries, ie. directories are not returned first and may be
+ * loaded much later, after many regular files.
+ * FIXME We could use scandir() to get directories first (or last!).
+ * We could also use ftw() from ftw.h instead of recursing ourselves, but it
+ * seems to be geared towards getting everything in the file tree.
+ */
+void append_to_playlist(const char * path) {
     const char *cmd[] = {"loadfile", path, "append", NULL};
     int err = mpv_command(HANDLE, cmd);
     check_mpv_err(err);
@@ -131,49 +171,44 @@ int append_to_playlist(const char * path) {
 
 void enumerate_dir(const char* szDirPath,
                      enum dirFilter eFilter,
-                     int64_t *iAddedFiles,
-                     int64_t* iOffset )
+                     uint64_t iAmount,
+                     uint64_t *iAddedFiles,
+                     uint64_t* iOffset, 
+                     int isRootDir
+                    )
 {
-    struct dirent *entry;
-#ifndef ___USE_MISC
-    struct stat st;
-#endif
     DIR *_dir = NULL;
     _dir = opendir(szDirPath);
+    if (_dir == NULL) return;
     printf("opendir: %s\n", szDirPath);
 
-    /* NOTES: in this implementation, we don't really care about the order of
-     * the returned entries, ie. directories are not returned first and may be
-     * loaded much later, after many regular files.
-     * FIXME We could use scandir() to get directories first (or last!).
-     * We could also use ftw() from ftw.h instead of recursing ourselves, but it
-     * seems to be geared towards getting everything in the file tree.
-     */
-
-    while (*iAddedFiles < MAX_READ_FILES) {
+    struct dirent *entry;
+#ifndef __USE_MISC
+    struct stat st;
+#endif
+    while (*iAddedFiles < iAmount) {
         entry = readdir(_dir);
-        if (!entry) { // end of stream
+        if (!entry) /* FIXME && szDirPath is root_dir*/ { // end of stream
             // TODO handle errors too here.
-            // rewinddir(dir);
+            // rewinddir(dir); // if method "replace"
             // continue;
             break;
         }
-
         char *name = entry->d_name;
 
         if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
-                continue;
+            continue;
 
+        // Build absolute path from szDirPath
         unsigned int iPathLength = snprintf(NULL, 0, "%s", szDirPath) + 1;
         size_t iFullPathLength = iPathLength + _D_ALLOC_NAMLEN(entry) + 1; // for '/'
         char szFullPath[iFullPathLength];
         snprintf(szFullPath, iFullPathLength, "%s/%s", szDirPath, name);
 
-#ifdef ___USE_MISC
+#ifdef __USE_MISC
         if ((entry->d_type == DT_DIR) /*&& (filter & D_DIRS)*/) {
-            // FIXME pass in szFullPath??
-            printf("Dir detected %s\n", szFullPath);
-            enumerate_dir(szFullPath, eFilter, iAddedFiles, iOffset);
+            printf("Dir detected %s.\n", szFullPath);
+            enumerate_dir(szFullPath, eFilter, iAmount, iAddedFiles, iOffset, 0);
             continue;
         } else {
 #else
@@ -183,14 +218,13 @@ void enumerate_dir(const char* szDirPath,
         }
         if(S_ISDIR(st.st_mode)) {
             printf("lstat(%s) -> ISDIR.\n", szFullPath);
-            enumerate_dir(szFullPath, eFilter, iAddedFiles, iOffset);
+            enumerate_dir(szFullPath, eFilter, iAmount, iAddedFiles, iOffset, 0);
             continue;
         } else {
 #endif // __USE_MISC
-
-        LOAD_CMD[1] = szFullPath;
-        mpv_command(HANDLE, LOAD_CMD);
-        (*iAddedFiles)++;
+            LOAD_CMD[1] = szFullPath;
+            mpv_command(HANDLE, LOAD_CMD);
+            (*iAddedFiles)++;
         }
     }
     closedir(_dir);
@@ -214,14 +248,29 @@ int isValidDirPath(const char * path) {
     return 0;
 }
 
+void update(uint64_t amount);
+
+void print_current_pl_entries() {
+    uint64_t newcount = get_playlist_length();
+    printf("Playlist length = %lu.\n", newcount);
+
+    char **entries = get_playlist_entries(newcount);
+    while (newcount != 0) {
+        --newcount;
+        // printf("DEBUG freeing entry %lu: %s.\n", newcount, entries[newcount]);
+        mpv_free(entries[newcount]);
+    };
+    free(entries);
+}
+
 int on_init() {
     /* Get the initial elements loaded in the playlist in static struct.
      * These should roughly correspond to the positional arguments passed to mpv.
      * Returns the number of directories detected, or -1 on error.
      */
-    int64_t pl_count = get_playlist_length();
+    uint64_t pl_count = get_playlist_length();
 
-    printf("Playlist length = %d.\n", pl_count);
+    printf("Playlist initial length = %lu.\n", pl_count);
 
     if (pl_count <= 1) {
         // mpv can handle loading a single directory just fine already.
@@ -230,51 +279,36 @@ int on_init() {
 
     g_InitialPL.count = pl_count;
     char **pl_entries = get_playlist_entries(pl_count);
-    g_InitialPL.entries = pl_entries;
 
-    clear_playlist();
+    int iNumState = 0;
+
+    g_InitialPL.entries = calloc(pl_count, sizeof(playlistEntry));
 
     for (int i = 0; i < pl_count; ++i) {
         printf("Checking playlist[%d]: %s.\n", i, pl_entries[i]);
 
         if (isValidDirPath(pl_entries[i])) {
-            g_iNumState++;
-            dirState *_dirState = (dirState *) malloc(sizeof(dirState));
-            if (_dirState == NULL) {
-                perror("Failed allocating dirState");
+            iNumState++;
+            dirState *_dt = malloc(sizeof(dirState));
+            if (_dt == NULL) {
+                perror("malloc dirState");
                 return -1;
             }
-            g_aDirState = (dirState **) reallocarray(g_aDirState, g_iNumState, sizeof(dirState));
-            if (g_aDirState == NULL) {
-                perror("Failed allocating dirState");
-                return -1;
-            }
-            g_aDirState[g_iNumState - 1] = _dirState;
-            g_aDirState[g_iNumState - 1]->root_dir = pl_entries[i];
-            printf("dir state: %s\n", g_aDirState[g_iNumState - 1]->root_dir);
-
-            int64_t offset = 0;
-            int64_t iAddedFiles = 0;
-            enumerate_dir(pl_entries[i], D_NORMAL, &iAddedFiles, &offset);
-            printf("Number of added files for %s: %d\n", pl_entries[i], iAddedFiles);
+            // g_InitialPL.entries[i] = PlaylistEntry;
+            g_InitialPL.entries[i].type = FT_DIR;
+            g_InitialPL.entries[i].u.state = _dt;
+            g_InitialPL.entries[i].u.state->root_dir = strdup(pl_entries[i]);
+            printf("new dir state for %s.\n", g_InitialPL.entries[i].u.state->root_dir);
         } else {
-            append_to_playlist(pl_entries[i]);
+            g_InitialPL.entries[i].type = FT_FILE;
+            g_InitialPL.entries[i].u.name = strdup(pl_entries[i]);
+            printf("new entry for file %s.\n", g_InitialPL.entries[i].u.name);
         }
         mpv_free(pl_entries[i]);
     }
-    int64_t newcount = get_playlist_length();
-    printf("New playlist length = %d.\n", newcount);
-
-    char **entries = get_playlist_entries(newcount);
-    --newcount;
-    while (newcount >= 0) {
-        mpv_free(entries[newcount]);
-        --newcount;
-    };
-    free(entries);
-
     free(pl_entries);
-    return g_iNumState;
+    update(MAX_READ_FILES);
+    return iNumState;
 }
 
 char *fread_string(FILE *file, char const *desired_name) {
@@ -369,9 +403,9 @@ void get_config(const char* szScriptName) {
     if (szConfPath == NULL) return ;
 
     FILE *fp = fopen((const char*)szConfPath, "r");
+    free(szConfPath);
     if (!fp) {
         perror("fopen");
-        free(szConfPath);
         return;
     }
 
@@ -401,7 +435,7 @@ void get_config(const char* szScriptName) {
             // }
             // MAX_READ_FILES = iValue;
 
-            printf("Got limit key %d\n", MAX_READ_FILES);
+            printf("Got limit key %lu\n", MAX_READ_FILES);
         }
     }
     free(line);
@@ -424,8 +458,8 @@ void get_config(const char* szScriptName) {
         mpv_node_list* _list = props.u.list;
         for (int i = 0; i < _list->num; ++i) {
             printf("key=%s. value=%s\n", _list->keys[i], _list->values[i].u.string);
-            char prefix[strlen(szScriptName + 2)];
-            strcpy(prefix, szScriptName);
+            char prefix[strlen(szScriptName + 2)]; // '-' + '\0'
+            strncpy(prefix, szScriptName, strlen(szScriptName));
             strncat(prefix, "-", 2);
             // "scriptname-" in found in key, get value
             if (strstr(_list->keys[i], prefix) != NULL) {
@@ -433,7 +467,7 @@ void get_config(const char* szScriptName) {
                 char key[strlen(_list->keys[i]) - strlen(prefix) + 1];
                 memcpy(key, &(_list->keys[i])[strlen(prefix)], sizeof(key) - 1);
                 key[sizeof(key) -1] = '\0';
-                printf("key: %s. len: %d.\n", key, sizeof(key));
+                printf("key: %s. len: %lu.\n", key, sizeof(key));
 
                 if (strcmp(key, "limit") == 0) {
                     printf("Valid key \"%s\" value: %s\n", key, _list->values[i].u.string);
@@ -449,46 +483,80 @@ void get_config(const char* szScriptName) {
 }
 
 void cleanup(void){
+    //TODO free each playlistEntry.u.name and playlistEntry.u.state.root_dir
 }
 
 /* Fetch some more items from the file system.
- * 
+ *
  * @param amount The number of files to fetch.
- * @param method "append" simply appends until no more files are found in the 
- *               directories we keep track of. 
- *               "replace" clears the playlist before appending files. When
- *               there are no more new files in the directory, go back to the 
- *               beginning and load until amount is reached.
  */
-void update(const char* method, uint64_t amount){
-    // TODO print message to console mpv_command("show-text", ...)
-    // const char *cmd[] = {"show-text", amount, NULL};
-    // check_mpv_err(mpv_command(HANDLE, cmd));
-    printf("Update with method %s, amount %d.\n", method, amount);
+void update(uint64_t amount) {
+    printf("Update with method %s, amount %lu.\n", methodNames[METHOD], amount);
 
+    if (METHOD == M_REPLACE) {
+        clear_playlist();
+    }
 
+    uint64_t iTotalAdded = 0;
+
+    for (int i = 0; i < g_InitialPL.count; ++i) {
+        if (g_InitialPL.entries[i].type == FT_FILE) {
+            append_to_playlist(g_InitialPL.entries[i].u.name);
+            continue;
+        }
+        uint64_t offset = 0;
+        uint64_t iAddedFiles = 0;
+        enumerate_dir(g_InitialPL.entries[i].u.state->root_dir,
+                      D_NORMAL,
+                      amount,
+                      &iAddedFiles,
+                      &offset,
+                      1);
+        printf("Number of added files for %s: %lu\n",
+                g_InitialPL.entries[i].u.state->root_dir, iAddedFiles);
+        iTotalAdded += iAddedFiles;
+    }
+    printf("Added %lu files in total.\n", iTotalAdded);
+
+    int length = snprintf(NULL, 0, "%lu", iTotalAdded);
+    length = length + 6 + 19 + 1;  // "Added " + " files to playlist."
+    char query[length];
+    snprintf(query, sizeof(query), "Added %lu files to playlist.", iTotalAdded);
+    const char *cmd[] = {"show-text", query, NULL};
+    check_mpv_err(mpv_command(HANDLE, cmd));
+    print_current_pl_entries();
 }
 
 
-void message_hander(mpv_event *event, const char* szScriptName){
+void message_handler(mpv_event *event, const char* szScriptName){
     mpv_event_client_message *msg = event->data;
     if (msg->num_args >= 2) {
+        /* DEBUG */
         for (int i = 0; i < msg->num_args; ++i) {
             printf("Got message arg: %d %s\n", i, msg->args[i]);
         }
+        /* DEBUG */
         if (strcmp(szScriptName, msg->args[0]) != 0) {
             return;
         }
-        if ((strcmp(msg->args[1], "replace") != 0) 
-           || (strcmp(msg->args[1], "append") != 0)) {
-            if (msg->num_args == 2) {
-                update(msg->args[1], MAX_READ_FILES);
-                return;
-            }
+        if (strcmp(msg->args[1], "replace") != 0) {
+            METHOD = M_REPLACE;
+        }
+        else if (strcmp(msg->args[1], "append") != 0) {
+            printf("Found append!\n");
+            METHOD = M_APPEND;
+        } else {
+            fprintf(stderr, "Error parsing update command. Using last used \
+method: \"%s\"\n", methodNames[METHOD]);
+        }
+        if (msg->num_args >= 3) {
             char *stop;
             uint64_t amount = (uint64_t)strtol(msg->args[2], &stop, 10);
-            update(msg->args[1], amount);
+            update(amount);
+            return;
         }
+        // 2 arguments, amount not specified.
+        update(MAX_READ_FILES);
     }
 }
 
@@ -497,7 +565,7 @@ int mpv_open_cplugin(mpv_handle *handle){
     const char* szScriptName = mpv_client_name(handle);
     printf("Loaded '%s'!\n", szScriptName);
     get_config(szScriptName);
-    printf("Limit set to %d\n", MAX_READ_FILES);
+    printf("Limit set to %lu\n", MAX_READ_FILES);
 
     // mpv_hook_add(handle, 0, "on_before_start_file", 50);
 
@@ -513,7 +581,7 @@ int mpv_open_cplugin(mpv_handle *handle){
         // if (event->event_id == MPV_EVENT_HOOK)
         //     on_before_start_file_handler(event);
         if (event->event_id == MPV_EVENT_CLIENT_MESSAGE)
-            message_hander(event, szScriptName);
+            message_handler(event, szScriptName);
         if (event->event_id == MPV_EVENT_SHUTDOWN) {
             cleanup();
             break;
