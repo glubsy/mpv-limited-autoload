@@ -100,7 +100,6 @@ int check_mpv_err(int status) {
 int on_before_start_file_handler(mpv_event *event) {
     mpv_event_hook *hook = (mpv_event_hook *)event->data;
     uint64_t id = hook->id;
-    // on_init();
     mpv_hook_continue(g_Handle, id);
     return 0;
 }
@@ -247,10 +246,12 @@ int enumerate_dir( dirNode *node,
             continue;
 
         // Build absolute path from szDirPath
-        unsigned int iPathLength = snprintf(NULL, 0, "%s", szDirPath) + 1;
-        size_t iFullPathLength = iPathLength + _D_ALLOC_NAMLEN(entry) + 1; // for '/'
-        char szFullPath[iFullPathLength];
-        snprintf(szFullPath, iFullPathLength, "%s/%s", szDirPath, name);
+        size_t fullPathLength = snprintf(NULL, 0, "%s", szDirPath)
+                                 + _D_ALLOC_NAMLEN(entry) 
+                                 + 1 // for '/'
+                                 + 1; // '\0'
+        char szFullPath[fullPathLength];
+        snprintf(szFullPath, fullPathLength, "%s/%s", szDirPath, name);
         // printf("Found entry: %s.\n", szFullPath);
 
 #ifdef __USE_MISC
@@ -654,17 +655,6 @@ method: \"%s\"\n", METHOD_NAMES[g_method]);
     }
 }
 
-void cleanup() {
-    // for (int i = 0; i < g_InitialPL.count; ++i) {
-    //     if (g_InitialPL.entries[i].type == FT_FILE) {
-    //         free(g_InitialPL.entries[i].u.name);
-    //     } else {
-    //         free(g_InitialPL.entries[i].u.dnode->name);
-    //     }
-    // }
-    // free(g_InitialPL.entries);
-}
-
 int mpv_open_cplugin(mpv_handle *handle) {
     g_Handle = handle;
     const char* szScriptName = mpv_client_name(handle);
@@ -688,10 +678,8 @@ int mpv_open_cplugin(mpv_handle *handle) {
         if (event->event_id == MPV_EVENT_CLIENT_MESSAGE)
             message_handler(event, szScriptName);
         if (event->event_id == MPV_EVENT_SHUTDOWN) {
-            cleanup();
             break;
         }
     }
-    cleanup();
     return 0;
 }
