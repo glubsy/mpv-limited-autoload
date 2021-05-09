@@ -38,7 +38,7 @@ typedef enum MethodType {
     M_APPEND
 } methodType;
 
-const char* METHOD_NAMES[] = {"replace", "append"};
+static const char* METHOD_NAMES[] = {"replace", "append"};
 
 static const char *g_loadCommand[] = {"loadfile", NULL, "append", NULL};
 methodType g_method = M_REPLACE;
@@ -173,6 +173,17 @@ void append_to_playlist(const char * path) {
     check_mpv_err(err);
 }
 
+void free_nodes(dirNode* node){
+    while(node->next != NULL) {
+        node = node->next;
+    }
+    while (node->prev != NULL) {
+        node = node->prev;
+        free(node->next);
+        node->next = NULL;
+    }
+}
+
 /* @return 0 if limit has been reached and we need to come back, 1 otherwise.
  */
 int enumerate_dir( dirNode *node,
@@ -206,14 +217,16 @@ int enumerate_dir( dirNode *node,
 
     struct dirent *entry;
     while (*iAddedFiles < iAmount) {
+        entry = NULL;
         entry = readdir(_dir);
 
-        if (!entry) { // end of stream
+        if (entry == NULL) { // end of stream
             printf("No more entry found in %s.\n", szDirPath);
             // TODO handle errors too here.
             node->offset = 0;
             if (node->isRootDir) {
                 if (g_method == M_REPLACE) {
+                    free_nodes(node);
                     rewinddir(_dir);
                     continue;
                 } else {
@@ -261,6 +274,7 @@ int enumerate_dir( dirNode *node,
             node->offset = telldir(_dir);
             if(enumerate_dir(node->next, eFilter, iAmount, iAddedFiles) == 1){
                 printf("enumerate()->free() %s\n", node->next->name);
+                free(node->next->name);
                 free(node->next);
                 node->next = NULL;
             }
@@ -268,6 +282,7 @@ int enumerate_dir( dirNode *node,
         }
         g_loadCommand[1] = szFullPath;
         mpv_command(g_Handle, g_loadCommand);
+        printf("Added file %s\n", szFullPath);
         (*iAddedFiles)++;
     }
 
@@ -279,6 +294,7 @@ int enumerate_dir( dirNode *node,
     node->mtime = st.st_mtime;
 
     closedir(_dir);
+    printf("Done for %s -> 0.\n", node->name);
     return 0;
 }
 
@@ -553,7 +569,8 @@ void display_added_files(uint64_t num_files) {
  * @param amount The number of files to fetch.
  */
 void update(uint64_t maxAmount) {
-    // printf("Update with method %s, maxAmount %lu.\n", METHOD_NAMES[g_method], maxAmount);
+    printf("===============================================\n\
+Update with method %s, maxAmount %lu.\n", METHOD_NAMES[g_method], maxAmount);
 
     if (g_method == M_REPLACE) {
         clear_playlist();
@@ -576,7 +593,7 @@ void update(uint64_t maxAmount) {
             enumerate_dir( node, D_NORMAL, maxAmount, &iAddedFiles );
         } else { // We have a previous subdir still in memory
             while (node->next != NULL) {
-                printf("Found %s as subdir of %s\n", node->next->name, node->name);
+                printf("node->next %s as subdir of %s\n", node->next->name, node->name);
                 // point at the last node in the linked list
                 node = node->next;
             }
@@ -587,6 +604,7 @@ void update(uint64_t maxAmount) {
                 printf("Done processing %s? -> %d.\n", node->next->name, done);
                 if (done == 1) {
                     printf("update()->free() %s\n", node->next->name);
+                    free(node->next->name);
                     free(node->next);
                     node->next = NULL;
                     continue;
@@ -595,9 +613,7 @@ void update(uint64_t maxAmount) {
                 }
             }
         }
-
-        printf("Added files from node %s: %lu.\n",
-               node->name, iAddedFiles);
+        printf("Added files from node %s: %lu.\n", node->name, iAddedFiles);
         iTotalAdded += iAddedFiles;
     }
     printf("Added files in total: %lu.\n", iTotalAdded);
