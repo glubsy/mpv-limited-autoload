@@ -2,14 +2,6 @@
 // Warning: do not link against libmpv.so! Read:
 //    https://mpv.io/manual/master/#linkage-to-libmpv
 // The pkg-config call is for adding the proper client.h include path.
-
-/* Objective: when directories are passed as positional arguments to MPV,
- * load files from these directories ourself instead of instead of letting the
- * mpv internal autoload script load the files the wrong way. ie. files
- * from the first read directory are loaded at once, and the directories left
- * in the playlist are lost in the amount of files, which reduces greatly
- * the chance of encountering them and loading their files too.
- */
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +23,7 @@
 // #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 mpv_handle *g_Handle = NULL;
-uint64_t g_maxReadFiles = 30;
+uint64_t g_maxReadFiles = 500;
 
 typedef enum MethodType {
     M_REPLACE = 0,
@@ -89,6 +81,13 @@ struct PlaylistDescriptor g_InitialPL = {
     .entries = NULL
 };
 
+enum dirFilter {
+    D_ALL = 0,
+    D_FILES,
+    D_DIRS, // recurse
+    D_NORMAL
+};
+
 int check_mpv_err(int status) {
     if ( status < MPV_ERROR_SUCCESS ) {
         printf("mpv API error %d: %s\n", status,
@@ -97,12 +96,14 @@ int check_mpv_err(int status) {
     return status; // == 0 for MPV_ERROR_SUCCESS
 }
 
+#if 0
 int on_before_start_file_handler(mpv_event *event) {
     mpv_event_hook *hook = (mpv_event_hook *)event->data;
     uint64_t id = hook->id;
     mpv_hook_continue(g_Handle, id);
     return 0;
 }
+#endif
 
 /* @param count number of item returned by property "playlist-count".
  */
@@ -139,6 +140,7 @@ uint64_t get_playlist_length() {
     return count;
 }
 
+#if 0
 // This doesn't work very well, as the playlist gets updated and starts playing
 // the next file or something.
 // int remove_file(int idx) {
@@ -150,22 +152,8 @@ uint64_t get_playlist_length() {
 //     int err = mpv_command(g_Handle, cmd);
 //     check_mpv_err(err);
 // }
+#endif
 
-enum dirFilter {
-    D_ALL = 0,
-    D_FILES,
-    D_DIRS, // recurse
-    D_NORMAL
-};
-
-
-/* NOTES: in this implementation, we don't really care about the order of
- * the returned entries, ie. directories are not returned first and may be
- * loaded much later, after many regular files.
- * FIXME We could use scandir() to get directories first (or last!).
- * We could also use ftw() from ftw.h instead of recursing ourselves, but it
- * seems to be geared towards getting everything in the file tree.
- */
 void append_to_playlist(const char * path) {
     const char *cmd[] = {"loadfile", path, "append", NULL};
     int err = mpv_command(g_Handle, cmd);
@@ -182,6 +170,14 @@ void free_nodes(dirNode* node){
         node->next = NULL;
     }
 }
+
+/* NOTES: in this implementation, we don't really care about the order of
+ * the returned entries, ie. directories are not returned first and may be
+ * loaded much later, after many regular files.
+ * FIXME We could use scandir() to get directories first (or last!).
+ * We could also use ftw() from ftw.h instead of recursing ourselves, but it
+ * seems to be geared towards getting everything in the file tree.
+ */
 
 /* @return 0 if limit has been reached and we need to come back, 1 otherwise.
  */
@@ -225,6 +221,7 @@ int enumerate_dir( dirNode *node,
             node->offset = 0;
             if (node->isRootDir) {
                 if (g_method == M_REPLACE) {
+                    // This is probably superfulous.
                     free_nodes(node);
                     rewinddir(_dir);
                     continue;
@@ -247,7 +244,7 @@ int enumerate_dir( dirNode *node,
 
         // Build absolute path from szDirPath
         size_t fullPathLength = snprintf(NULL, 0, "%s", szDirPath)
-                                 + _D_ALLOC_NAMLEN(entry) 
+                                 + _D_ALLOC_NAMLEN(entry)
                                  + 1 // for '/'
                                  + 1; // '\0'
         char szFullPath[fullPathLength];
@@ -333,7 +330,7 @@ void print_current_pl_entries() {
 }
 
 int on_init() {
-    /* Get the initial elements loaded in the playlist in static struct.
+    /* Get the initial elements loaded in the playlist into a static struct.
      * These should roughly correspond to the positional arguments passed to mpv.
      * Returns the number of directories detected, or -1 on error.
      */
@@ -380,6 +377,7 @@ int on_init() {
     return iNumState;
 }
 
+#if 0
 char *fread_string(FILE *file, char const *desired_name) {
     char name[128];
     char val[128];
@@ -402,10 +400,10 @@ int fread_int(FILE *file, char const *desired_name, uint64_t *ret) {
     free(temp);
     return ret_val;
 }
+#endif
 
 char *trimwhitespace(char *str) {
   char *end;
-
   // Trim leading space
   while(isspace((unsigned char)*str)) str++;
 
@@ -418,7 +416,6 @@ char *trimwhitespace(char *str) {
 
   // Write new null terminator character
   end[1] = '\0';
-
   return str;
 }
 
@@ -429,13 +426,13 @@ char *get_config_path(const char* szScriptName) {
     Dl_info dl_info;
     if (dladdr(get_config_path, &dl_info) == 0) {
         fprintf(stderr, "[%s] Failed getting SO path.\n", szScriptName);
-
+        // Fallback to using default config path.
         const char* s = getenv("XDG_CONFIG_HOME");
         printf("Got XDG_CONFIG_HOME : %s\n",
                (s != NULL) ? s : "getenv returned NULL");
         if (s == NULL) return NULL;
 
-        // FIXME make sure the program in use is indeed "mpv"
+        // FIXME make sure the program in use is indeed "mpv".
         char szConfPath[strlen(s) + strlen(szScriptName) + 22 + 1];
         snprintf(szConfPath, sizeof(szConfPath),
                  "%s/mpv/script-opts/%s.conf", s, szScriptName);
@@ -445,7 +442,7 @@ char *get_config_path(const char* szScriptName) {
 
     printf("Loaded SO path found: %s\n", dl_info.dli_fname);
     char szSoPath[strlen(dl_info.dli_fname) + 1];
-    strncpy(szSoPath, dl_info.dli_fname, strlen(dl_info.dli_fname));
+    strcpy(szSoPath, dl_info.dli_fname);
     dirname(dirname(szSoPath));
     printf("Relative config directory to script location: %s\n", szSoPath);
 
@@ -476,7 +473,6 @@ void get_config(const char* szScriptName) {
         perror("fopen");
         return;
     }
-
 #if 1
     char *line = NULL;
     size_t len = 0;
@@ -508,7 +504,7 @@ void get_config(const char* szScriptName) {
     }
     free(line);
 #else
-    // Obsolete: not flexible
+    // Obsolete, not very flexible.
     int ret = fread_int(fp, "limit", &g_maxReadFiles);
 #endif
     fclose(fp);
@@ -518,7 +514,7 @@ void get_config(const char* szScriptName) {
     int error = mpv_get_property(g_Handle, "options/script-opts",
                                  MPV_FORMAT_NODE, &props);
     if (error < 0) {
-        printf("Error getting prop.\n");
+        fprintf(stderr, "[%s] Error getting options/script-opts.\n", szScriptName);
         return;
     }
     printf("format=%d\n", (int)props.format);
@@ -526,10 +522,11 @@ void get_config(const char* szScriptName) {
         mpv_node_list* _list = props.u.list;
         for (int i = 0; i < _list->num; ++i) {
             printf("key=%s. value=%s\n", _list->keys[i], _list->values[i].u.string);
-            char prefix[strlen(szScriptName + 2)]; // '-' + '\0'
-            strncpy(prefix, szScriptName, strlen(szScriptName));
+            char prefix[strlen(szScriptName) + 2]; // '-' + '\0'
+            prefix[sizeof(prefix) - 1] = '\0';
+            strcpy(prefix, szScriptName);
             strncat(prefix, "-", 2);
-            // "scriptname-" in found in key, get value
+            // "scriptname-" is found in key, get value.
             if (strstr(_list->keys[i], prefix) != NULL) {
                 printf("Found key prefix %s in %s.\n", prefix, _list->keys[i]);
                 char key[strlen(_list->keys[i]) - strlen(prefix) + 1];
@@ -546,7 +543,7 @@ void get_config(const char* szScriptName) {
         }
     }
     mpv_free_node_contents(&props);
-
+    // TODO observe changes in property.
     // mpv_observe_property(g_Handle, 0, "options/script-opts", MPV_FORMAT_NODE)
 }
 
@@ -566,12 +563,11 @@ void display_added_files(uint64_t num_files) {
 }
 
 /* Fetch some more items from the file system.
- *
  * @param amount The number of files to fetch.
  */
-void update(uint64_t maxAmount) {
+void update(uint64_t amount) {
     printf("===============================================\n\
-Update with method %s, maxAmount %lu.\n", METHOD_NAMES[g_method], maxAmount);
+Update with method %s, amount %lu.\n", METHOD_NAMES[g_method], amount);
 
     if (g_method == M_REPLACE) {
         clear_playlist();
@@ -591,7 +587,7 @@ Update with method %s, maxAmount %lu.\n", METHOD_NAMES[g_method], maxAmount);
         dirNode *node = g_InitialPL.entries[i].u.dnode;
 
         if (node->next == NULL) {
-            enumerate_dir( node, D_NORMAL, maxAmount, &iAddedFiles );
+            enumerate_dir( node, D_NORMAL, amount, &iAddedFiles );
         } else { // We have a previous subdir still in memory
             while (node->next != NULL) {
                 printf("node->next %s as subdir of %s\n", node->next->name, node->name);
@@ -600,7 +596,7 @@ Update with method %s, maxAmount %lu.\n", METHOD_NAMES[g_method], maxAmount);
             }
             while (node->prev != NULL) {
                 printf("Processing %s as subdir of %s\n", node->name, node->prev->name);
-                int done = enumerate_dir( node, D_NORMAL, maxAmount, &iAddedFiles );
+                int done = enumerate_dir( node, D_NORMAL, amount, &iAddedFiles );
                 node = node->prev;
                 printf("Done processing %s? -> %d.\n", node->next->name, done);
                 if (done == 1) {
