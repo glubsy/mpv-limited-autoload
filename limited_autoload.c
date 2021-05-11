@@ -332,7 +332,7 @@ int enumerate_dir( dirNode *node,
 #else
         if ((telldir(_dir) >= prev_offset) && (rewound)) {
 #endif
-            debug_print("Duplicate previous entry detected! Breaking!\n");
+            debug_print("detected an already read offset! Breaking.\n");
             break;
         }
 
@@ -376,7 +376,7 @@ void update(uint64_t, enum MethodType);
 
 void print_current_pl_entries() {
     uint64_t newcount = get_playlist_length();
-    // debug_print("Playlist length = %lu.\n", newcount);
+    debug_print("Playlist length = %lu.\n", newcount);
 
     char **entries = get_playlist_entries(newcount);
     while (newcount != 0) {

@@ -26,10 +26,12 @@ A prebuilt GNU/Linux binary is available for your convenience at the release pag
 1. Configure the default amount of files fetched from storage with a file in `${XDG_CONFIG_HOME}/mpv/script-opts/limited_autoload.conf` with the following content:
 ```
 limit=500
+recurse=1
 ````
-The script initially loads this many files from any directory it finds in the initial playlist. This value will override the default hardcoded limit.
+* The script initially loads `limit` number of files from any directory it finds in the initial playlist.
+* If `recurse=0`, the script will not load files from any sub-directory it encounters.
 
-You can also override this value from the command line: `mpv --script-opts=limited_autoload-limit=800`
+You can also override these values from the command line: `mpv --script-opts=limited_autoload-limit=800,limited_autoload-recurse=0`
 
 2. Add the following key bindings to `input.conf`, usually in `${XDG_CONFIG_HOME}/mpv/input.conf`:
 ```
