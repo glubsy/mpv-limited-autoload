@@ -90,12 +90,7 @@ struct PlaylistDescriptor g_InitialPL = {
     .entries = NULL
 };
 
-enum dirFilter {
-    D_REGFILES = 1,
-    D_DIRS,
-    D_NORMAL, // D_FILES | D_DIRS
-    D_ALL
-};
+char *g_excludedExt[100] = { NULL }; // extensions we will ignore
 
 int check_mpv_err(int status) {
     if ( status < MPV_ERROR_SUCCESS ) {
@@ -164,6 +159,29 @@ uint64_t get_playlist_length() {
 // }
 #endif
 
+void to_lower_case(char *string) {
+    for (int i = 0; i <= strlen(string); ++i ) {
+        if (string[i] >= 65 && string[i] <= 90)
+            string[i] = string[i] + 32;
+    }
+}
+
+char has_excluded_extension(const char *filename) {
+    const char *dot = strrchr(filename, '.');
+    if (!dot || dot == filename) return 0;
+
+    char ext[strlen(dot + 1)];
+    strcpy(ext, dot + 1);
+    to_lower_case(ext);
+
+    for(int i = 0; g_excludedExt[i] != NULL; ++i) {
+        if (strncmp(ext, g_excludedExt[i], strlen(g_excludedExt[i])) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void append_to_playlist(const char * path) {
     const char *cmd[] = {"loadfile", path, "append", NULL};
     int err = mpv_command(g_Handle, cmd);
@@ -192,7 +210,6 @@ void free_nodes(dirNode* node){
 /* @return 0 if limit has been reached and we need to come back, 1 otherwise.
  */
 int enumerate_dir( dirNode *node,
-                    enum dirFilter eFilter,
                     uint64_t iAmount,
                     uint64_t *iAddedFiles )
 {
@@ -309,7 +326,7 @@ int enumerate_dir( dirNode *node,
 #endif
             debug_print("saved current offset for %s: %lu.\n", node->name, node->offset);
 
-            if(enumerate_dir(node->next, eFilter, iAmount, iAddedFiles) == 1){
+            if(enumerate_dir(node->next, iAmount, iAddedFiles) == 1){
                 debug_print("enumerate()->free() %s\n", node->next->name);
                 free(node->next->name);
                 free(node->next);
@@ -336,9 +353,14 @@ int enumerate_dir( dirNode *node,
             break;
         }
 
+        if (has_excluded_extension(entry->d_name)) {
+            debug_print("Excluded extension in %s.\n", entry->d_name);
+            continue;
+        }
+
         g_loadCommand[1] = szFullPath;
         mpv_command(g_Handle, g_loadCommand);
-        debug_print("added file %s.\n", szFullPath);
+        debug_print("added file to playlist: %s.\n", szFullPath);
         (*iAddedFiles)++;
     }
 
@@ -477,6 +499,26 @@ char *trimwhitespace(char *str) {
   return str;
 }
 
+void parse_exclude_arg(char *value, const char *delim) {
+    // Overwrite any previous entry.
+    for (int i = 0; g_excludedExt[i] != NULL; ++i) {
+        free(g_excludedExt[i]);
+    }
+
+    int i = 0;
+    char *tok = NULL;
+    tok = strtok(value, delim);
+    while(tok != NULL) {
+        tok = trimwhitespace(tok);
+        to_lower_case(tok);
+        g_excludedExt[i] = strdup(tok);
+        debug_print("Excluded extension [%d] \"%s\"\n", i, g_excludedExt[i]);
+        g_excludedExt[i + 1] = NULL;
+        ++i;
+        tok = strtok(NULL, delim);
+    };
+}
+
 char *get_config_path(const char* szScriptName) {
     /* Get the absolute path to our shared object, in order to deduce the path
      * to the config file relative to its path.
@@ -537,16 +579,18 @@ void get_config(const char* szScriptName) {
     size_t len = 0;
     ssize_t read = 0;
     while ((read = getline(&line, &len, fp)) != -1) {
-        debug_print("retrieved line \"%s\", length %zu:\n", line, read);
+
         trimwhitespace(line);
-        debug_print("%s\n", line);
+        debug_print("Read config file line \"%s\", length %zu:\n", line, read);
 
         char *key = strtok(line, "=");
         char *value = strtok(NULL, "=");
-        if (value == NULL) continue;
+        if (value == NULL)
+            continue;
 
         trimwhitespace(key);
         debug_print("key=%s / value=%s.\n", key, value);
+
         if (strcmp(key, "limit") == 0) {
             char *stop;
             g_maxReadFiles = (uint64_t)strtoul(value, &stop, 10);
@@ -565,6 +609,10 @@ void get_config(const char* szScriptName) {
             char *stop;
             g_recurseDirs = (unsigned char)strtoul(value, &stop, 10);
             debug_print("config file key \"%s\" = %d\n", key, g_recurseDirs);
+            continue;
+        }
+        if (strcmp(key, "exclude") == 0) {
+            parse_exclude_arg(value, ",");
         }
     }
     free(line);
@@ -582,15 +630,19 @@ void get_config(const char* szScriptName) {
         fprintf(stderr, "[%s] Error getting options/script-opts.\n", szScriptName);
         return;
     }
-    // debug_print("format=%d\n", (int)props.format);
     if (props.format == MPV_FORMAT_NODE_MAP) {
         mpv_node_list* _list = props.u.list;
+
         for (int i = 0; i < _list->num; ++i) {
-            // debug_print("key=%s. value=%s\n", _list->keys[i], _list->values[i].u.string);
+
+            debug_print("script-opts: key=%s. value=%s\n",
+                        _list->keys[i], _list->values[i].u.string);
+
             char prefix[strlen(szScriptName) + 2]; // '-' + '\0'
             prefix[sizeof(prefix) - 1] = '\0';
             strcpy(prefix, szScriptName);
             strncat(prefix, "-", 2);
+
             // "scriptname-" is found in key, get value.
             if (strstr(_list->keys[i], prefix) != NULL) {
                 // debug_print("Found key prefix %s in %s.\n", prefix, _list->keys[i]);
@@ -610,6 +662,12 @@ void get_config(const char* szScriptName) {
                     debug_print("Valid key \"%s\" value: %s\n", key, _list->values[i].u.string);
                     char *stop;
                     g_recurseDirs = (unsigned char)strtoul(_list->values[i].u.string, &stop, 10);
+                    continue;
+                }
+
+                if (strcmp(key, "exclude") == 0) {
+                    parse_exclude_arg(_list->values[i].u.string, ":");
+                    continue;
                 }
             }
         }
@@ -677,7 +735,7 @@ update with method %s, amount %lu.\n", METHOD_NAMES[method], amount);
         }
 
         if (node->next == NULL) {
-            enumerate_dir( node, D_NORMAL, amount, &iAddedFiles );
+            enumerate_dir( node, amount, &iAddedFiles );
         } else {
             // We have at least one previous subdir still in memory
             while (node->next != NULL) {
@@ -687,7 +745,7 @@ update with method %s, amount %lu.\n", METHOD_NAMES[method], amount);
             }
             while (node->prev != NULL) {
                 debug_print("Processing %s as subdir of %s\n", node->name, node->prev->name);
-                int done = enumerate_dir( node, D_NORMAL, amount, &iAddedFiles );
+                int done = enumerate_dir( node, amount, &iAddedFiles );
                 node = node->prev;
                 debug_print("Done processing %s? -> %d.\n", node->next->name, done);
                 if (done == 1) {

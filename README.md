@@ -17,7 +17,7 @@ This script might solve two issues:
 gcc -o limited_autoload.so limited_autoload.c `pkg-config --cflags mpv` -shared -fPIC
 ```
 
-Then copy `limited_autoload.so` into `${XDG_CONFIG_HOME}/mpv/scripts/` (or invoke the script with `mpv --scripts=...`).
+Then copy `limited_autoload.so` into `${XDG_CONFIG_HOME}/mpv/scripts/` (or invoke the script with `mpv --scripts=/path/to/script`).
 
 A prebuilt GNU/Linux binary is available for your convenience at the release page.
 
@@ -27,11 +27,17 @@ A prebuilt GNU/Linux binary is available for your convenience at the release pag
 ```
 limit=500
 recurse=1
+exclude=blend,rar,zip,tar,7z
 ````
-* The script initially loads `limit` number of files from any directory it finds in the initial playlist.
-* If `recurse=0`, the script will not load files from any sub-directory it encounters.
+* Initially load at most `limit` number of files from any directory found in the initial playlist, ie. the list of pathnames passed to MPV as positional arguments.
+* If `recurse=0`, files from any sub-directory encountered will not be loaded.
+* Files with a filename extension present in the `exclude` list will be skipped (case insensitive). 
 
-You can also override these values from the command line: `mpv --script-opts=limited_autoload-limit=800,limited_autoload-recurse=0`
+You can also override these values from the command line: 
+```
+mpv --script-opts=limited_autoload-limit=800,limited_autoload-recurse=0,limited_autoload-exclude=blend:rar:zip:7z
+```
+Notice the delimiter is different for `exclude` on the command line. The values override those in the .conf file.
 
 2. Add the following key bindings to `input.conf`, usually in `${XDG_CONFIG_HOME}/mpv/input.conf`:
 ```
@@ -48,7 +54,7 @@ The number represents the amount of files to fetch every time the key is pressed
 
 * "replace" method: this will replace the current playlist with the next batch of files returned by the operating system each time the key is pressed. It acts as a dynamic "view" over the file system tree.
 
-The `mpv_wrapper.sh` script is just a convenience shell script not directly related to this script, but I share it as perhaps it might be useful to somebody too.
+The `mpv_wrapper.sh` script is just a convenience shell script not directly related to this here script, but perhaps it might be useful to somebody.
 
 # License
 
