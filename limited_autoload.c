@@ -29,6 +29,15 @@
 fprintf(stderr, "%d:%s(): ", __LINE__, __func__); \
 fprintf(stderr, fmt,  ##__VA_ARGS__); } } while (0)
 
+// Values from Linux limits.h
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+#ifndef NAME_MAX
+#define NAME_MAX 255
+#endif
+
 mpv_handle *g_Handle = NULL;
 uint64_t g_maxReadFiles = 500;
 
@@ -113,11 +122,12 @@ int on_before_start_file_handler(mpv_event *event) {
  */
 char **get_playlist_entries(int count) {
     char **array = (char **)calloc(count, sizeof(char*));
-    int length = snprintf(NULL, 0, "%d", count);
-    length = 9 + length + 9 + 1;  //  playlist/ + digits +filename + \0
-    char query[length];
+    if (array == NULL) {
+        perror("get_playlist_entries()");
+    }
+    char query[120];
+    query[119] = '\0';
     for (int i = 0; i < count; ++i) {
-        query[0] = '\0';
         snprintf(query, sizeof(query), "playlist/%d/filename", i);
         // debug_print("Query prop: \"%s\".\n", query);
 
@@ -167,11 +177,17 @@ void to_lower_case(char *string) {
 }
 
 char has_excluded_extension(const char *filename) {
+    debug_print("Testing ext: %s\n", filename);
     const char *dot = strrchr(filename, '.');
     if (!dot || dot == filename) return 0;
 
-    char ext[strlen(dot + 1)];
-    strcpy(ext, dot + 1);
+    if (strlen(dot + 1) > 9) {
+        fprintf(stderr, "\"%s\" has a filename extension that is too long.",
+                filename);
+        return 0;
+    }
+    char ext[10]; // filename extensions are never longer than that
+    strncpy(ext, dot + 1, sizeof(ext));
     to_lower_case(ext);
 
     for(int i = 0; g_excludedExt[i] != NULL; ++i) {
@@ -280,12 +296,8 @@ int enumerate_dir( dirNode *node,
             continue;
 
         // Build absolute path from szDirPath
-        size_t fullPathLength = snprintf(NULL, 0, "%s", szDirPath)
-                                 + _D_ALLOC_NAMLEN(entry)
-                                 + 1 // for '/'
-                                 + 1; // '\0'
-        char szFullPath[fullPathLength];
-        snprintf(szFullPath, fullPathLength, "%s/%s", szDirPath, name);
+        char szFullPath[PATH_MAX];
+        snprintf(szFullPath, sizeof(szFullPath), "%s/%s", szDirPath, name);
         // debug_print("Found entry: %s.\n", szFullPath);
 
 #if defined __USE_MISC && defined _DIRENT_HAVE_D_TYPE // might not be the right macros to test for
@@ -512,7 +524,7 @@ void parse_exclude_arg(char *value, const char *delim) {
         tok = trimwhitespace(tok);
         to_lower_case(tok);
         g_excludedExt[i] = strdup(tok);
-        debug_print("Excluded extension [%d] \"%s\"\n", i, g_excludedExt[i]);
+        debug_print("Set excluded extension [%d] \"%s\"\n", i, g_excludedExt[i]);
         g_excludedExt[i + 1] = NULL;
         ++i;
         tok = strtok(NULL, delim);
@@ -527,6 +539,7 @@ char *get_config_path(const char* szScriptName) {
     // Get the address of a symbol in this shared object
     if (dladdr((const void*)get_config_path, &dl_info) == 0) {
         fprintf(stderr, "[%s] Failed getting SO path.\n", szScriptName);
+
         // Fallback to using default config path.
         const char* s = getenv("XDG_CONFIG_HOME");
         debug_print("Got XDG_CONFIG_HOME : %s\n",
@@ -534,7 +547,8 @@ char *get_config_path(const char* szScriptName) {
         if (s == NULL) return NULL;
 
         // FIXME make sure the program in use is indeed "mpv".
-        char szConfPath[strlen(s) + strlen(szScriptName) + 22 + 1];
+        char szConfPath[PATH_MAX];
+        szConfPath[0] = '\0';
         snprintf(szConfPath, sizeof(szConfPath),
                  "%s/mpv/script-opts/%s.conf", s, szScriptName);
         debug_print("Path to conf file might be: %s\n", szConfPath);
@@ -542,13 +556,12 @@ char *get_config_path(const char* szScriptName) {
     }
 
     debug_print("Loaded SO path found: %s\n", dl_info.dli_fname);
-    char szSoPath[strlen(dl_info.dli_fname) + 1];
-    strcpy(szSoPath, dl_info.dli_fname);
+    char *szSoPath = strdup(dl_info.dli_fname);
     dirname(dirname(szSoPath));
     debug_print("Relative config directory to script location: %s\n", szSoPath);
 
-    char szConfPath[strlen(szSoPath) + strlen(szScriptName) + 18 + 1];
-    snprintf(szConfPath, sizeof(szConfPath),
+    char szConfPath[PATH_MAX];
+    snprintf(szConfPath, PATH_MAX,
              "%s/script-opts/%s.conf", szSoPath, szScriptName);
     debug_print("Config location might be: %s\n", szConfPath);
 
@@ -560,13 +573,14 @@ char *get_config_path(const char* szScriptName) {
     // debug_print("Found config file at: %s\n", abs_path);
     // free(abs_path);
     // }
+    free(szSoPath);
     return strdup(szConfPath);
 }
 
 void get_config(const char* szScriptName) {
     char *szConfPath = get_config_path(szScriptName);
 
-    if (szConfPath == NULL) return ;
+    if (szConfPath == NULL) return;
 
     FILE *fp = fopen((const char*)szConfPath, "r");
     free(szConfPath);
@@ -577,11 +591,11 @@ void get_config(const char* szScriptName) {
 #if 1
     char *line = NULL;
     size_t len = 0;
-    ssize_t read = 0;
-    while ((read = getline(&line, &len, fp)) != -1) {
+    ssize_t nread = 0;
+    while ((nread = getline(&line, &len, fp)) != -1) {
 
         trimwhitespace(line);
-        debug_print("Read config file line \"%s\", length %zu:\n", line, read);
+        debug_print("Read config file (line length %zd): \"%s\"\n", nread, line);
 
         char *key = strtok(line, "=");
         char *value = strtok(NULL, "=");
@@ -589,7 +603,7 @@ void get_config(const char* szScriptName) {
             continue;
 
         trimwhitespace(key);
-        debug_print("key=%s / value=%s.\n", key, value);
+        debug_print("Config file valid k:v \"%s\":\"%s\"\n", key, value);
 
         if (strcmp(key, "limit") == 0) {
             char *stop;
@@ -601,14 +615,13 @@ void get_config(const char* szScriptName) {
             //     iValue = 0;
             // }
             // g_maxReadFiles = iValue;
-
-            debug_print("config file key \"%s\" = %lu\n", key, g_maxReadFiles);
+            debug_print("Set maxReadFile value to %zu.\n", g_maxReadFiles);
             continue;
         }
         if (strcmp(key, "recurse") == 0) {
             char *stop;
             g_recurseDirs = (unsigned char)strtoul(value, &stop, 10);
-            debug_print("config file key \"%s\" = %d\n", key, g_recurseDirs);
+            debug_print("Set recurseDirs value to %d.\n", g_recurseDirs);
             continue;
         }
         if (strcmp(key, "exclude") == 0) {
@@ -631,42 +644,43 @@ void get_config(const char* szScriptName) {
         return;
     }
     if (props.format == MPV_FORMAT_NODE_MAP) {
-        mpv_node_list* _list = props.u.list;
+        mpv_node_list* nl = props.u.list;
 
-        for (int i = 0; i < _list->num; ++i) {
+        for (int i = 0; i < nl->num; ++i) {
 
-            debug_print("script-opts: key=%s. value=%s\n",
-                        _list->keys[i], _list->values[i].u.string);
+            debug_print("CLI script-opts: key=%s. value=%s\n",
+                        nl->keys[i], nl->values[i].u.string);
 
-            char prefix[strlen(szScriptName) + 2]; // '-' + '\0'
+            char prefix[NAME_MAX + 2]; // '-' + '\0'
             prefix[sizeof(prefix) - 1] = '\0';
             strcpy(prefix, szScriptName);
             strncat(prefix, "-", 2);
 
             // "scriptname-" is found in key, get value.
-            if (strstr(_list->keys[i], prefix) != NULL) {
-                // debug_print("Found key prefix %s in %s.\n", prefix, _list->keys[i]);
-                char key[strlen(_list->keys[i]) - strlen(prefix) + 1];
-                memcpy(key, &(_list->keys[i])[strlen(prefix)], sizeof(key) - 1);
-                key[sizeof(key) -1] = '\0';
-                // debug_print("key: %s. len: %lu.\n", key, sizeof(key));
+            if (strstr(nl->keys[i], prefix) != NULL) {
+
+                // point to key name without the prefix in scriptname-key=value
+                char *key = nl->keys[i] + strlen(prefix);
+
+                debug_print("CLI valid k:v \"%s\":\"%s\"\n",
+                            key, nl->values[i].u.string);
 
                 if (strcmp(key, "limit") == 0) {
-                    // debug_print("Valid key \"%s\" value: %s\n", key, _list->values[i].u.string);
                     char *stop;
-                    g_maxReadFiles = (uint64_t)strtoul(_list->values[i].u.string, &stop, 10);
+                    g_maxReadFiles = (uint64_t)strtoul(nl->values[i].u.string,
+                                                       &stop, 10);
                     continue;
                 }
 
                 if (strcmp(key, "recurse") == 0) {
-                    debug_print("Valid key \"%s\" value: %s\n", key, _list->values[i].u.string);
                     char *stop;
-                    g_recurseDirs = (unsigned char)strtoul(_list->values[i].u.string, &stop, 10);
+                    g_recurseDirs = (unsigned char)strtoul(nl->values[i].u.string,
+                                                           &stop, 10);
                     continue;
                 }
 
                 if (strcmp(key, "exclude") == 0) {
-                    parse_exclude_arg(_list->values[i].u.string, ":");
+                    parse_exclude_arg(nl->values[i].u.string, ":");
                     continue;
                 }
             }
@@ -678,17 +692,11 @@ void get_config(const char* szScriptName) {
 }
 
 void display_added_files(uint64_t num_files) {
-    int length = snprintf(NULL, 0, "%lu", num_files);
-    static const char *msg[] = {"Replaced playlist with %lu files.",
+    static const char *fmt[] = {"Replaced playlist with %lu files.",
                                 "Appended %lu files to playlist."};
-    if (g_lastMethod == M_REPLACE) {
-        length = length + strlen(msg[0]) - 3 + 1; // minus "%lu"
-    } else {
-        length = length + strlen(msg[1]) - 3 + 1;
-    }
-    char query[length];
-    snprintf(query, sizeof(query), msg[g_lastMethod], num_files);
-    const char *cmd[] = {"show-text", query, "5000" , NULL};
+    char msg[50];
+    snprintf(msg, sizeof(msg), fmt[g_lastMethod], num_files);
+    const char *cmd[] = {"show-text", msg, "5000" , NULL};
     check_mpv_err(mpv_command(g_Handle, cmd));
 }
 

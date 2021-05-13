@@ -101,7 +101,7 @@ if [[ "${SHUFFLE}" -eq 1 ]]; then
 		echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
 		eval ${FIND_CMD} | mpv ${OPTIONS} --playlist=-;
 	fi
-elif [[ "${PLAIN}" -eq 1 ]] && [[ ${#PARAMS[@]} -eq 1 ]]; then
+elif [[ "${PLAIN}" -eq 1 ]]; then #&& [[ ${#PARAMS[@]} -eq 1 ]]; then
 	# Build string from arguments, separated by \n characters
 	# and feed it to mpv as a playlist. mpv will then auto-load files 
 	# as they are being read.
