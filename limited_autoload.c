@@ -39,7 +39,7 @@ fprintf(stderr, fmt,  ##__VA_ARGS__); } } while (0)
 #endif
 
 mpv_handle *g_Handle = NULL;
-uint64_t g_maxReadFiles = 500;
+uint64_t g_maxReadFiles = 100;
 
 typedef enum MethodType {
     M_REPLACE = 0,
@@ -177,7 +177,6 @@ void to_lower_case(char *string) {
 }
 
 char has_excluded_extension(const char *filename) {
-    debug_print("Testing ext: %s\n", filename);
     const char *dot = strrchr(filename, '.');
     if (!dot || dot == filename) return 0;
 

@@ -25,7 +25,7 @@ A prebuilt GNU/Linux binary is available for your convenience at the release pag
 
 1. Configure the default amount of files fetched from storage with a file in `${XDG_CONFIG_HOME}/mpv/script-opts/limited_autoload.conf` with the following content:
 ```
-limit=500
+limit=100
 recurse=1
 exclude=blend,rar,zip,tar,7z
 ````
@@ -41,8 +41,8 @@ Notice the delimiter is different for `exclude` on the command line. The values 
 
 2. Add the following key bindings to `input.conf`, usually in `${XDG_CONFIG_HOME}/mpv/input.conf`:
 ```
-f script-message limited_autoload append 100
-F script-message limited_autoload replace 100
+f script-message limited_autoload append 200
+F script-message limited_autoload replace 200
 ```
 Change to whatever key you prefer.
 "append" and "replace" are explained below.
