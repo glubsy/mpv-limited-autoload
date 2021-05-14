@@ -23,7 +23,6 @@
 // #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 // #undef __USE_MISC // DEBUG
-#define DEBUG 0
 #define debug_print(fmt, ...) \
             do { if (DEBUG) {\
 fprintf(stderr, "%d:%s(): ", __LINE__, __func__); \
