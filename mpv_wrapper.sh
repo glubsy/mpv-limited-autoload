@@ -105,7 +105,6 @@ elif [[ "${PLAIN}" -eq 1 ]]; then #&& [[ ${#PARAMS[@]} -eq 1 ]]; then
 	# Build string from arguments, separated by \n characters
 	# and feed it to mpv as a playlist. mpv will then auto-load files 
 	# as they are being read.
-	# This only works well with one single pos argument. Otherwise, the playlist will be filled with all files from the first directory read, and other directory entries will be lost in the long list of files in the playlist. Hence we forbid this command if there is more than one pos arg.
 	#PAR="";
 	#for p in "$@"; do 	# or ${PARAMS[@]}
         #    PAR="${p}$'\n'${PAR}";

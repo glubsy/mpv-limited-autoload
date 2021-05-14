@@ -426,11 +426,9 @@ int on_init() {
      * Returns the number of directories detected, or -1 on error.
      */
     uint64_t pl_count = get_playlist_length();
-
     debug_print("Initial playlist length = %lu.\n", pl_count);
 
-    if (pl_count <= 1) {
-        // mpv can handle loading a single directory just fine already.
+    if (pl_count == 0) {
         return 0;
     }
 
@@ -604,6 +602,12 @@ void get_config(const char* szScriptName) {
         trimwhitespace(key);
         debug_print("Config file valid k:v \"%s\":\"%s\"\n", key, value);
 
+        if (strcmp(key, "enabled") == 0) {
+            char *stop;
+            g_scriptActive = (unsigned char)strtoul(value, &stop, 10);
+            continue;
+        }
+
         if (strcmp(key, "limit") == 0) {
             char *stop;
             g_maxReadFiles = (uint64_t)strtoul(value, &stop, 10);
@@ -663,6 +667,16 @@ void get_config(const char* szScriptName) {
 
                 debug_print("CLI valid k:v \"%s\":\"%s\"\n",
                             key, nl->values[i].u.string);
+
+                if (strcmp(key, "enabled") == 0) {
+                    char *stop;
+                    g_scriptActive = (unsigned char)strtoul(nl->values[i].u.string,
+                                                            &stop, 10);
+                    if (!g_scriptActive) {
+                        return;
+                    }
+                    continue;
+                }
 
                 if (strcmp(key, "limit") == 0) {
                     char *stop;
@@ -814,6 +828,10 @@ int mpv_open_cplugin(mpv_handle *handle) {
     debug_print("Loaded script '%s'.\n", szScriptName);
     get_config(szScriptName);
     // debug_print("Limit set to %lu\n", g_maxReadFiles);
+
+    if (g_scriptActive <= 0) {
+        return 0;
+    }
 
     // mpv_hook_add(handle, 0, "on_before_start_file", 50);
 

@@ -28,10 +28,12 @@ A prebuilt GNU/Linux binary is available for your convenience at the release pag
 limit=100
 recurse=1
 exclude=blend,rar,zip,tar,7z
+enabled=1
 ````
 * Initially load at most `limit` number of files from any directory found in the initial playlist, ie. the list of pathnames passed to MPV as positional arguments.
 * If `recurse=0`, files from any sub-directory encountered will not be loaded.
 * Files with a filename extension present in the `exclude` list will be skipped (case insensitive). 
+* The script can be explicitly disabled with `enabled=0` (mostly useful as a CLI argument).
 
 You can also override these values from the command line: 
 ```
