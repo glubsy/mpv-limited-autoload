@@ -42,6 +42,10 @@ while (( "$#" )); do
      PLAIN=1
      shift
      ;;
+    -l|--limited) # use limited_autoload.so script
+     LIMITED=1
+     shift
+     ;;
     -*|--*=) # unsupported flags
       echo "Error: Unsupported flag $1" >&2
       exit 1
@@ -110,8 +114,11 @@ elif [[ "${PLAIN}" -eq 1 ]]; then #&& [[ ${#PARAMS[@]} -eq 1 ]]; then
         #    PAR="${p}$'\n'${PAR}";
 	#done;
 	# echo "DEBUG: PAR: ${PAR}";
+  OPTIONS="--script-opts=limited_autoload-enabled=0";
 	mpv ${OPTIONS} ${PARAMS[@]};
-
+elif [[ "${LIMITED}" -eq 1 ]]; then
+  OPTIONS="--script-opts=limited_autoload-enabled=1";
+  mpv ${OPTIONS} ${PARAMS[@]};
 else
 	#echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
 	eval ${FIND_CMD} | mpv ${OPTIONS} --playlist=- --;
