@@ -465,7 +465,9 @@ int on_init() {
         mpv_free(pl_entries[i]);
     }
     free(pl_entries);
-    update(g_maxReadFiles, g_lastMethod);
+    if (iNumState) {
+        update(g_maxReadFiles, g_lastMethod);
+    }
     return iNumState;
 }
 
@@ -716,9 +718,6 @@ void display_added_files(uint64_t num_files) {
     check_mpv_err(mpv_command(g_Handle, cmd));
 }
 
-/* Fetch some more items from the file system.
- * @param amount The number of files to fetch.
- */
 void update(uint64_t amount, enum MethodType method) {
     debug_print("===============================================\n\
 update with method %s, amount %lu.\n", METHOD_NAMES[method], amount);
