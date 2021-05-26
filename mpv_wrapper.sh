@@ -114,14 +114,14 @@ elif [[ "${PLAIN}" -eq 1 ]]; then #&& [[ ${#PARAMS[@]} -eq 1 ]]; then
         #    PAR="${p}$'\n'${PAR}";
 	#done;
 	# echo "DEBUG: PAR: ${PAR}";
-  OPTIONS="--script-opts=limited_autoload-enabled=0";
-	mpv ${OPTIONS} ${PARAMS[@]};
+        OPTIONS="--script-opts=limited_autoload-enabled=0";
+        mpv ${OPTIONS} "${PARAMS[@]}";
 elif [[ "${LIMITED}" -eq 1 ]]; then
-  OPTIONS="--script-opts=limited_autoload-enabled=1";
-  mpv ${OPTIONS} ${PARAMS[@]};
+        OPTIONS="--script-opts=limited_autoload-enabled=1";
+        mpv ${OPTIONS} "${PARAMS[@]}";
 else
-	#echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
-	eval ${FIND_CMD} | mpv ${OPTIONS} --playlist=- --;
+        #echo "DEBUG:$FIND_CMD"; eval ${FIND_CMD};
+        eval ${FIND_CMD} | mpv ${OPTIONS} --playlist=- --;
 
 fi
 
