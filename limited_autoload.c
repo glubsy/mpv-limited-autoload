@@ -236,6 +236,7 @@ int enumerate_dir( dirNode *node,
     _dir = opendir(szDirPath);
     if (_dir == NULL) return 1;
 
+    errno = 0;
     struct stat st;
 
     if (stat(szDirPath, &st) < 0) {
@@ -257,15 +258,15 @@ int enumerate_dir( dirNode *node,
     long prev_offset = node->offset;
 
     struct dirent *entry;
-    errno = 0;
     char rewound = 0;
 
     while (*iAddedFiles < iAmount) {
+        errno = 0;
         entry = NULL;
         entry = readdir(_dir);
 
         if (entry == NULL) { // end of stream
-            if (errno) {
+            if (errno != 0) {
                 // TODO handle errors properly
                 perror(szDirPath);
                 return 1;

@@ -9,17 +9,21 @@ This script might solve two issues:
 
 2. Very large amounts of files are loaded into MPV's internal playlist, which may or may not be required by the user. Perhaps the user only wants a peek at what is inside the directory, perhaps the user wants a random selection of files. This script reduces the amount of files fetched from storage, akin to a "lazy load".
 
+## Known issue
+
+This plugin currently does not work with mounted FUSE file systems, most notably SSHFS. The entire SSHFS will crash, need more investigation and testing.
+
 # Installation
 
 ## Build
 
 ```
-gcc -o limited_autoload.so limited_autoload.c `pkg-config --cflags mpv` -shared -fPIC
+make
 ```
 
 Then copy `limited_autoload.so` into `${XDG_CONFIG_HOME}/mpv/scripts/` (or invoke the script with `mpv --scripts=/path/to/script`).
 
-A prebuilt GNU/Linux binary is available for your convenience at the release page.
+A prebuilt GNU/Linux binary is available for convenience in the release page (built on Arch Linux, may or may not work in other distributions).
 
 ## Configuration
 
